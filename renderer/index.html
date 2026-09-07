@@ -1,0 +1,128 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Audio Visualizer</title>
+  <style>
+    html, body {
+      margin: 0;
+      padding: 0;
+      width: 100%;
+      height: 100%;
+      background: #000;
+      overflow: hidden;
+      cursor: none;
+    }
+    body.windowed {
+      cursor: default;
+    }
+    canvas {
+      display: block;
+      width: 100vw;
+      height: 100vh;
+    }
+    #status {
+      position: fixed;
+      left: 16px;
+      bottom: 12px;
+      color: rgba(255, 255, 255, 0.55);
+      font: 13px/1.4 -apple-system, Segoe UI, sans-serif;
+      pointer-events: none;
+      text-shadow: 0 1px 3px rgba(0,0,0,0.8);
+      white-space: pre-line;
+      transition: opacity 0.4s ease;
+    }
+
+    /* Config toolbar: only shown in windowed mode. Frameless windows have
+       no OS title bar, so this doubles as the drag handle for moving the
+       window between monitors. */
+    #toolbar {
+      display: none;
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 42px;
+      align-items: center;
+      gap: 10px;
+      padding: 0 10px;
+      background: rgba(18, 18, 20, 0.88);
+      border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+      color: #eee;
+      font: 13px/1 -apple-system, Segoe UI, sans-serif;
+      -webkit-app-region: drag;
+      z-index: 10;
+    }
+    body.windowed #toolbar {
+      display: flex;
+    }
+    body.windowed canvas {
+      /* keep clear of the toolbar so the visualizer doesn't render underneath it */
+      position: fixed;
+      top: 42px;
+      left: 0;
+      height: calc(100vh - 42px);
+    }
+    #toolbar .app-name {
+      font-weight: 600;
+      opacity: 0.9;
+      white-space: nowrap;
+    }
+    #toolbar .preset-name {
+      flex: 1 1 auto;
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      opacity: 0.7;
+    }
+    #toolbar .controls {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      -webkit-app-region: no-drag;
+    }
+    #toolbar button {
+      -webkit-app-region: no-drag;
+      background: rgba(255, 255, 255, 0.08);
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      color: #eee;
+      font: inherit;
+      padding: 5px 9px;
+      border-radius: 5px;
+      cursor: pointer;
+    }
+    #toolbar button:hover {
+      background: rgba(255, 255, 255, 0.18);
+    }
+    #toolbar button.active {
+      background: rgba(90, 160, 255, 0.35);
+      border-color: rgba(90, 160, 255, 0.6);
+    }
+    #toolbar .hotkeys {
+      -webkit-app-region: no-drag;
+      opacity: 0.45;
+      white-space: nowrap;
+    }
+  </style>
+</head>
+<body>
+  <div id="toolbar">
+    <span class="app-name">Visualizer</span>
+    <span class="preset-name" id="toolbarPreset"></span>
+    <div class="controls">
+      <button id="btnPrev" title="Previous preset (P)">⏮</button>
+      <button id="btnNext" title="Next preset (Space / N)">⏭</button>
+      <button id="btnRandom" title="Random preset (R)">🔀</button>
+      <button id="btnAuto" title="Toggle auto-cycle (A)">Auto</button>
+      <button id="btnMoveDisplay" title="Move to next display">Move ▸</button>
+      <button id="btnFullscreen" title="Toggle fullscreen (F)">⛶</button>
+      <button id="btnQuit" title="Quit (Esc)">✕</button>
+    </div>
+    <span class="hotkeys">Space/N next · P prev · R random · A auto · F fullscreen · Esc quit</span>
+  </div>
+  <canvas id="canvas"></canvas>
+  <div id="status"></div>
+  <script src="renderer.js"></script>
+</body>
+</html>

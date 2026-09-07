@@ -1,0 +1,33 @@
+{
+  "name": "audio-visualizer",
+  "version": "1.0.0",
+  "description": "Fullscreen system-audio-reactive visualizer using Butterchurn (MilkDrop) presets, driven by Windows WASAPI loopback capture via Electron.",
+  "main": "main.js",
+  "private": true,
+  "license": "MIT",
+  "author": "sky",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/sky-five/audio-visualizer.git"
+  },
+  "keywords": [
+    "electron",
+    "visualizer",
+    "milkdrop",
+    "butterchurn",
+    "winamp",
+    "audio",
+    "wasapi",
+    "loopback"
+  ],
+  "scripts": {
+    "start": "electron ."
+  },
+  "dependencies": {
+    "butterchurn": "^3.0.0-beta.4",
+    "butterchurn-presets": "^3.0.0-beta.4"
+  },
+  "devDependencies": {
+    "electron": "^33.0.0"
+  }
+}
