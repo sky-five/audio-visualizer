@@ -2,6 +2,16 @@ const { app, BrowserWindow, desktopCapturer, session, ipcMain, protocol, net, sc
 const path = require('path');
 const { pathToFileURL } = require('url');
 
+// GPU preference: on hybrid-graphics laptops (Intel iGPU + NVIDIA/AMD dGPU),
+// Chromium/Electron defaults to the low-power integrated GPU. This visualizer
+// is GPU-bound (WebGL2 fragment shaders driving the full canvas every frame),
+// so it should prefer the discrete GPU when one exists. Must be set before
+// app.whenReady() — these are Chromium command-line switches, not runtime APIs.
+app.commandLine.appendSwitch('force_high_performance_gpu');
+app.commandLine.appendSwitch('ignore-gpu-blocklist');
+app.commandLine.appendSwitch('enable-gpu-rasterization');
+app.commandLine.appendSwitch('enable-zero-copy');
+
 let mainWindow;
 
 // "Fullscreen" here is simulated by sizing the borderless window to cover
@@ -108,6 +118,15 @@ app.whenReady().then(() => {
       callback({ video: sources[0], audio: 'loopback' });
     });
   }, { useSystemPicker: false });
+
+  // Instrument/mic input mode (renderer.js) uses plain getUserMedia({audio}),
+  // separate from the loopback path above. Electron denies media permission
+  // requests by default unless a handler explicitly grants them, so both the
+  // async request handler and the sync check handler need to allow 'media'.
+  session.defaultSession.setPermissionRequestHandler((webContents, permission, callback) => {
+    callback(permission === 'media');
+  });
+  session.defaultSession.setPermissionCheckHandler((webContents, permission) => permission === 'media');
 
   createWindow();
 
