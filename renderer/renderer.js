@@ -51,8 +51,10 @@ let currentStream = null;
 let currentSourceNode = null;
 let currentQualityIndex = 1;
 let inputMode = 'system'; // 'system' (WASAPI loopback) or 'instrument' (mic/line-in via getUserMedia)
+// Filtered down to exclude blacklisted (known-to-hang) presets once init()
+// fetches the list from main — see loadPresetAt for why a blacklist exists.
 let presetKeys = Object.keys(presets);
-let presetIndex = Math.floor(Math.random() * presetKeys.length);
+let presetIndex = 0;
 let autoCycleEnabled = true;
 let autoCycleTimer = null;
 
@@ -77,12 +79,76 @@ function resizeCanvas() {
   if (visualizer) visualizer.setRendererSize(width, height);
 }
 
-function loadPresetAt(index, { blend = BLEND_SECONDS } = {}) {
+// A handful of community Butterchurn presets are simply buggy. loadPreset()
+// itself can throw synchronously, or the preset can compile fine but throw
+// later during render() (handled in renderLoop below). Either way, skip to
+// the next preset automatically rather than getting stuck — with a retry
+// cap so a broken run of consecutive presets can't recurse forever.
+//
+// A worse category throws nothing at all — the eel-wasm expressions or
+// shaders just hang the JS thread synchronously, which try/catch can't do
+// anything about. We can't recover from that here; ipcRenderer.send below
+// tells main.js what we're about to attempt so that IF the whole renderer
+// goes unresponsive, main can identify and blacklist the culprit and reload
+// us back to life. See main.js for that half of the story.
+function loadPresetAt(index, { blend = BLEND_SECONDS, attemptsLeft = presetKeys.length } = {}) {
   presetIndex = ((index % presetKeys.length) + presetKeys.length) % presetKeys.length;
   const name = presetKeys[presetIndex];
-  visualizer.loadPreset(presets[name], blend);
+  ipcRenderer.send('preset-load-attempt', name);
+  try {
+    visualizer.loadPreset(presets[name], blend);
+  } catch (err) {
+    console.warn(`preset failed to load, skipping: "${name}"`, err.message);
+    if (attemptsLeft > 1) {
+      loadPresetAt(index + 1, { blend, attemptsLeft: attemptsLeft - 1 });
+    } else {
+      setStatus('all presets failed to load', { fade: false });
+    }
+    return;
+  }
+  // Delay the "success" signal — a hang can happen on the first render()
+  // frame rather than during loadPreset() itself. If we cleared the attempt
+  // attribution immediately, main.js wouldn't know who to blame for a hang
+  // that shows up moments later. If the thread is frozen, this timeout
+  // callback simply never runs, which is exactly what we want.
+  setTimeout(() => ipcRenderer.send('preset-load-success', name), 2000);
   setStatus(name);
   toolbarPresetEl.textContent = name;
+}
+
+if (process.env.AV_DEBUG_LOG) {
+  window.__loadPresetByName = (name) => {
+    const idx = presetKeys.indexOf(name);
+    if (idx === -1) throw new Error(`preset not found: ${name}`);
+    loadPresetAt(idx, { blend: 0 });
+  };
+
+  window.__stressTestAllPresets = async (limit = presetKeys.length) => {
+    console.log('[stress] starting, testing', limit, 'of', presetKeys.length);
+    const failures = [];
+    for (let i = 0; i < limit; i++) {
+      const name = presetKeys[i];
+      console.log('[stress] attempting', i, name);
+      let loadError = null;
+      try {
+        visualizer.loadPreset(presets[name], 0);
+      } catch (err) {
+        loadError = err.message;
+      }
+      // let a handful of frames render so render()-time errors surface too
+      const errorsBefore = consecutiveRenderErrors;
+      await new Promise((r) => setTimeout(r, 120));
+      const renderErrored = consecutiveRenderErrors > errorsBefore || consecutiveRenderErrors > 0;
+      consecutiveRenderErrors = 0;
+      if (loadError || renderErrored) {
+        failures.push({ name, loadError, renderErrored });
+        console.log('[stress] FAIL', name, loadError || '(render error)');
+      }
+      if (i % 10 === 0) console.log('[stress] progress', i, '/', limit);
+    }
+    console.log('[stress] done. failures:', JSON.stringify(failures));
+    return failures;
+  };
 }
 
 function nextPreset() {
@@ -112,8 +178,25 @@ function toggleAutoCycle() {
   restartAutoCycle();
 }
 
+let consecutiveRenderErrors = 0;
+
 function renderLoop() {
-  if (visualizer) visualizer.render();
+  try {
+    if (visualizer) visualizer.render();
+    consecutiveRenderErrors = 0;
+  } catch (err) {
+    consecutiveRenderErrors += 1;
+    console.warn(`preset render error in "${presetKeys[presetIndex]}" (${consecutiveRenderErrors}):`, err.message);
+    // A single bad frame usually isn't fatal (e.g. a transient NaN from a
+    // preset's own audio-reactive math); a run of them means this preset is
+    // actually broken, so bail out to the next one instead of spamming
+    // errors at 60fps forever.
+    if (consecutiveRenderErrors >= 5) {
+      consecutiveRenderErrors = 0;
+      setStatus(`preset errored, skipping: "${presetKeys[presetIndex]}"`, { fade: false, holdMs: 4000 });
+      nextPreset();
+    }
+  }
   requestAnimationFrame(renderLoop);
 }
 
@@ -232,6 +315,13 @@ function cycleQuality() {
 }
 
 async function init() {
+  const blacklist = await ipcRenderer.invoke('get-preset-blacklist');
+  if (blacklist.length) {
+    presetKeys = presetKeys.filter((name) => !blacklist.includes(name));
+    console.log(`excluded ${blacklist.length} blacklisted preset(s):`, blacklist);
+  }
+  presetIndex = Math.floor(Math.random() * presetKeys.length);
+
   // Dynamic import() of a bare specifier isn't resolvable from a
   // non-module <script>; resolve butterchurn's absolute file path via
   // require.resolve (Node-style resolution). The page is served over the

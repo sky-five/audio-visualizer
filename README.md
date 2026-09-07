@@ -72,6 +72,17 @@ title bar to grab.
   lag and double-fire well behind the real state — tracking our own boolean
   and sizing the window directly sidesteps that entirely. See the comments in
   [`main.js`](main.js) for the full story.
+- **Preset resilience** — community MilkDrop presets are occasionally buggy
+  in three different ways, each handled differently: a `loadPreset()` call
+  that throws synchronously (caught, skips to the next preset), a `render()`
+  call that starts throwing mid-playback (caught in the render loop, skips
+  after a few consecutive failures), and — the nastiest kind — a preset whose
+  eel-wasm expressions hang the renderer's JS thread outright with no
+  exception at all. That last one can't be caught from inside the renderer;
+  the main process detects it via Chromium's own unresponsive-page signal,
+  reloads the window, and permanently blacklists the offending preset
+  (persisted to disk under Electron's `userData` folder) so it's never loaded
+  again.
 
 ## Performance & display
 
@@ -108,7 +119,7 @@ title bar to grab.
 ## Roadmap / ideas
 
 - [ ] Packaged installer (`electron-builder`)
-- [ ] Preset favorites / blacklist
+- [ ] Preset favorites (broken presets already auto-blacklist themselves)
 - [ ] Optional now-playing overlay via the Windows SMTC API
 - [ ] Cross-platform loopback capture (macOS/Linux)
 - [ ] Input-device picker (choose a specific interface instead of the OS default) for instrument mode
