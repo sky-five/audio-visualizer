@@ -43,6 +43,8 @@ npm start
 | P           | Previous preset                  |
 | R           | Random preset                    |
 | A           | Toggle auto-cycle                |
+| I           | Toggle audio input (system loopback / mic \| instrument) |
+| Q           | Cycle render quality (mesh resolution) |
 | F           | Toggle fullscreen / windowed     |
 | Esc         | Quit                              |
 
@@ -82,10 +84,36 @@ title bar to grab.
   (persisted to disk under Electron's `userData` folder) so it's never loaded
   again.
 
+## Performance & display
+
+- GPU-accelerated WebGL2 rendering throughout (Butterchurn). On startup the
+  app picks a mesh-resolution tier (Low/Medium/High/Ultra) based on the
+  canvas's actual pixel count, so a 4K display automatically renders at a
+  denser mesh than 1080p — press **Q** to cycle tiers manually if you want to
+  trade quality for headroom.
+- On laptops with hybrid graphics (Intel integrated + NVIDIA/AMD discrete),
+  the app hints Chromium to prefer the discrete GPU (`force_high_performance_gpu`),
+  since this workload is GPU-bound every frame.
+- The canvas always renders at your display's native pixel count
+  (`devicePixelRatio`-aware), so a 4K monitor gets a genuine 4K render
+  surface, not an upscaled 1080p one.
+
+## Audio input modes
+
+- **System** (default) — WASAPI loopback, captures whatever's playing through
+  your speakers, as described above.
+- **Instrument / mic** — press **I** or the toolbar button to switch to a
+  direct `getUserMedia` input instead (echo cancellation, noise suppression,
+  and auto-gain are all disabled so it doesn't dull a live signal). Plug a
+  guitar (or anything else) into an audio interface, set it as your Windows
+  default recording device, and the visualizer reacts to it directly — no
+  system loopback involved. This is also the current path toward real-time
+  guitar-reactive visuals; see the roadmap below for where that's headed next.
+
 ## Known limitations
 
 - Windows-only (WASAPI loopback via Chromium's desktop capture)
-- Captures the full system audio mix, not a single app in isolation
+- System mode captures the full system audio mix, not a single app in isolation
 - No now-playing metadata (track/artist) — pure audio-reactive visuals by design
 
 ## Roadmap / ideas
@@ -94,6 +122,8 @@ title bar to grab.
 - [ ] Preset favorites (broken presets already auto-blacklist themselves)
 - [ ] Optional now-playing overlay via the Windows SMTC API
 - [ ] Cross-platform loopback capture (macOS/Linux)
+- [ ] Input-device picker (choose a specific interface instead of the OS default) for instrument mode
+- [ ] Pitch/onset detection layered on top of instrument input, for visuals that react to notes/chords rather than just amplitude
 
 ## Contributing
 

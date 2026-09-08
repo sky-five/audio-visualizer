@@ -20,13 +20,37 @@ const statusEl = document.getElementById('status');
 const toolbarEl = document.getElementById('toolbar');
 const toolbarPresetEl = document.getElementById('toolbarPreset');
 const btnAuto = document.getElementById('btnAuto');
+const btnInput = document.getElementById('btnInput');
 
 const AUTO_CYCLE_MS = 20000;
 const BLEND_SECONDS = 2.7;
 
+// Butterchurn's mesh (the vertex grid the warp shader distorts) defaults to
+// roughly 1080p-tuned settings. On a 4K canvas that undersells the GPU: a
+// denser mesh gives visibly smoother warping at the cost of more vertex
+// shader work, which a discrete GPU handles easily. Auto-picked at startup
+// from the canvas's actual pixel count, and cyclable at runtime with Q in
+// case auto-detection guesses wrong for your setup.
+const QUALITY_LEVELS = [
+  { name: 'Low', meshWidth: 24, meshHeight: 18 },
+  { name: 'Medium', meshWidth: 32, meshHeight: 24 },
+  { name: 'High', meshWidth: 48, meshHeight: 36 },
+  { name: 'Ultra (4K)', meshWidth: 64, meshHeight: 48 },
+];
+
+function pickDefaultQualityIndex(pixelCount) {
+  if (pixelCount > 3840 * 2160 * 0.9) return 3; // 4K+
+  if (pixelCount > 2560 * 1440 * 0.9) return 2; // 1440p
+  if (pixelCount > 1920 * 1080 * 0.9) return 1; // 1080p
+  return 1;
+}
+
 let visualizer = null;
 let audioContext = null;
 let currentStream = null;
+let currentSourceNode = null;
+let currentQualityIndex = 1;
+let inputMode = 'system'; // 'system' (WASAPI loopback) or 'instrument' (mic/line-in via getUserMedia)
 // Filtered down to exclude blacklisted (known-to-hang) presets once init()
 // fetches the list from main — see loadPresetAt for why a blacklist exists.
 let presetKeys = Object.keys(presets);
@@ -176,7 +200,25 @@ function renderLoop() {
   requestAnimationFrame(renderLoop);
 }
 
-async function connectAudio() {
+function stopCurrentAudio() {
+  if (currentSourceNode) {
+    currentSourceNode.disconnect();
+    currentSourceNode = null;
+  }
+  if (currentStream) {
+    currentStream.getTracks().forEach((track) => track.stop());
+    currentStream = null;
+  }
+}
+
+function attachStream(stream) {
+  currentStream = stream;
+  const sourceNode = audioContext.createMediaStreamSource(stream);
+  currentSourceNode = sourceNode;
+  visualizer.connectAudio(sourceNode);
+}
+
+async function connectSystemAudio() {
   setStatus('waiting for system audio…', { fade: false });
 
   // Chromium requires a video track alongside desktop-audio capture; we
@@ -186,7 +228,6 @@ async function connectAudio() {
     audio: true,
   });
 
-  currentStream = stream;
   stream.getVideoTracks().forEach((track) => track.stop());
 
   const audioTracks = stream.getAudioTracks();
@@ -195,14 +236,82 @@ async function connectAudio() {
   }
 
   audioTracks[0].addEventListener('ended', () => {
+    if (inputMode !== 'system') return; // superseded by a mode switch, not a real drop
     setStatus('audio stream ended, reconnecting…', { fade: false });
-    connectAudio().catch((err) => setStatus(`reconnect failed: ${err.message}`, { fade: false }));
+    connectSystemAudio().catch((err) =>
+      setStatus(`reconnect failed: ${err.message}`, { fade: false })
+    );
   });
 
-  const sourceNode = audioContext.createMediaStreamSource(stream);
-  visualizer.connectAudio(sourceNode);
-
+  attachStream(stream);
   setStatus(presetKeys[presetIndex]);
+}
+
+// Instrument/mic input: a guitar (or anything else) plugged into an audio
+// interface that's set as the Windows default input device shows up here
+// like any other microphone. Processing that a browser normally applies to
+// voice calls (echo cancellation, noise suppression, AGC) actively hurts an
+// instrument signal, so all three are explicitly disabled.
+async function connectInstrumentAudio() {
+  setStatus('waiting for mic/instrument input…', { fade: false });
+
+  const stream = await navigator.mediaDevices.getUserMedia({
+    audio: {
+      echoCancellation: false,
+      noiseSuppression: false,
+      autoGainControl: false,
+    },
+  });
+
+  const audioTracks = stream.getAudioTracks();
+  if (audioTracks.length === 0) {
+    throw new Error('No input device available.');
+  }
+
+  audioTracks[0].addEventListener('ended', () => {
+    if (inputMode !== 'instrument') return;
+    setStatus('input device disconnected, reconnecting…', { fade: false });
+    connectInstrumentAudio().catch((err) =>
+      setStatus(`reconnect failed: ${err.message}`, { fade: false })
+    );
+  });
+
+  attachStream(stream);
+  setStatus(`${presetKeys[presetIndex]}  (input: ${audioTracks[0].label || 'mic/instrument'})`);
+}
+
+function connectAudioForCurrentMode() {
+  return inputMode === 'system' ? connectSystemAudio() : connectInstrumentAudio();
+}
+
+function toggleInputMode() {
+  inputMode = inputMode === 'system' ? 'instrument' : 'system';
+  stopCurrentAudio();
+  btnInput.textContent = inputMode === 'system' ? 'Input: System' : 'Input: Instrument';
+  btnInput.classList.toggle('active', inputMode === 'instrument');
+  connectAudioForCurrentMode().catch((err) =>
+    setStatus(`could not connect audio: ${err.message}`, { fade: false })
+  );
+}
+
+function createVisualizerInstance({ meshWidth, meshHeight }) {
+  const dpr = window.devicePixelRatio || 1;
+  return butterchurn.createVisualizer(audioContext, canvas, {
+    width: canvas.width,
+    height: canvas.height,
+    pixelRatio: dpr,
+    meshWidth,
+    meshHeight,
+  });
+}
+
+function cycleQuality() {
+  currentQualityIndex = (currentQualityIndex + 1) % QUALITY_LEVELS.length;
+  const level = QUALITY_LEVELS[currentQualityIndex];
+  visualizer = createVisualizerInstance(level);
+  if (currentSourceNode) visualizer.connectAudio(currentSourceNode);
+  loadPresetAt(presetIndex, { blend: 0 });
+  setStatus(`quality: ${level.name} (mesh ${level.meshWidth}×${level.meshHeight})`);
 }
 
 async function init() {
@@ -233,15 +342,13 @@ async function init() {
 
   audioContext = new (window.AudioContext || window.webkitAudioContext)();
 
-  const dpr = window.devicePixelRatio || 1;
   resizeCanvas();
 
-  visualizer = butterchurn.createVisualizer(audioContext, canvas, {
-    width: Math.floor(window.innerWidth * dpr),
-    height: Math.floor(window.innerHeight * dpr),
-    pixelRatio: dpr,
-  });
-  console.log('visualizer created', !!visualizer);
+  currentQualityIndex = pickDefaultQualityIndex(canvas.width * canvas.height);
+  visualizer = createVisualizerInstance(QUALITY_LEVELS[currentQualityIndex]);
+  console.log(
+    `visualizer created at ${canvas.width}x${canvas.height}, quality: ${QUALITY_LEVELS[currentQualityIndex].name}`
+  );
 
   loadPresetAt(presetIndex, { blend: 0 });
   btnAuto.classList.toggle('active', autoCycleEnabled);
@@ -249,7 +356,7 @@ async function init() {
   requestAnimationFrame(renderLoop);
 
   try {
-    await connectAudio();
+    await connectAudioForCurrentMode();
     console.log('audio connected ok');
   } catch (err) {
     console.log('audio connect FAILED:', err.message);
@@ -259,7 +366,7 @@ async function init() {
   setStatus(
     [
       presetKeys[presetIndex],
-      'Space/N next · P prev · R random · A auto-cycle · F fullscreen · Esc quit',
+      'Space/N next · P prev · R random · A auto-cycle · I input · Q quality · F fullscreen · Esc quit',
     ].join('\n'),
     { holdMs: 6000 }
   );
@@ -276,6 +383,7 @@ document.getElementById('btnPrev').addEventListener('click', prevPreset);
 document.getElementById('btnNext').addEventListener('click', nextPreset);
 document.getElementById('btnRandom').addEventListener('click', randomPreset);
 document.getElementById('btnAuto').addEventListener('click', toggleAutoCycle);
+btnInput.addEventListener('click', toggleInputMode);
 document.getElementById('btnMoveDisplay').addEventListener('click', () => {
   ipcRenderer.send('move-to-next-display');
 });
@@ -304,6 +412,14 @@ document.addEventListener('keydown', (event) => {
     case 'a':
     case 'A':
       toggleAutoCycle();
+      break;
+    case 'i':
+    case 'I':
+      toggleInputMode();
+      break;
+    case 'q':
+    case 'Q':
+      cycleQuality();
       break;
     case 'f':
     case 'F':
